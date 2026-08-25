@@ -77,13 +77,34 @@ def largest_component_per_class(pred):
 from scipy.signal import medfilt
 
 
-def smooth_imc_solder_boundary(pred, median_k=41, box_k=21):
+def _smooth_line(arr, w, median_k, box_k):
+    mk = min(median_k, w - (1 - w % 2))
+    mk = mk - 1 if mk % 2 == 0 else mk
+    mk = max(1, mk)
+    s = medfilt(arr, kernel_size=mk)
+    bk = max(1, min(box_k, w))
+    kernel = np.ones(bk) / bk
+    return np.convolve(np.pad(s, bk // 2, mode="edge"), kernel, mode="valid")[:w]
+
+
+def smooth_imc_solder_boundary(pred, cu_median_k=61, cu_box_k=21,
+                                imc_median_k_frac=0.55, imc_median_k_range=(9, 51),
+                                imc_box_k_frac=0.35, imc_box_k_range=(5, 25)):
     """The labels this model was trained on are smooth hand-drawn curves;
     pixel-level jaggedness in the prediction is model noise, not signal.
-    Smooth the IMC/solder (upper) envelope moderately -- enough to drop
-    speckle, not so much it flattens genuine scallop shape -- and clip
-    anything above it back to solder. The Cu/IMC (lower) line is left as
-    the model's raw prediction (only the upper one was reported jagged)."""
+
+    Cu/IMC (lower) boundary: physically near-flat (confirmed against a domain
+    expert's labeling -- unrelated to scratches or the scalloped IMC/solder
+    edge), so smooth it with a wide fixed kernel and then hard-assign every
+    pixel below it to Cu. Noise inside solid Cu (e.g. a polishing scratch the
+    model mis-reads as IMC/solder) must not survive once we know it's below
+    the interface -- there is nothing else it could physically be.
+
+    IMC/solder (upper) boundary: a genuine scallop, so the smoothing window
+    must scale with the local IMC thickness. A fixed-size kernel flattens
+    thin IMC layers (where the kernel spans most of the whole layer) far more
+    than thick ones, which is exactly backwards -- thin layers need a
+    *narrower* kernel to keep their real undulation visible."""
     h, w = pred.shape
     top = np.full(w, np.nan)
     bottom = np.full(w, np.nan)
@@ -104,20 +125,25 @@ def smooth_imc_solder_boundary(pred, median_k=41, box_k=21):
     top_f = np.interp(idx, idx[valid], top[valid])
     bottom_f = np.interp(idx, idx[valid], bottom[valid])
 
-    mk = min(median_k, w - (1 - w % 2))
-    mk = mk - 1 if mk % 2 == 0 else mk
-    mk = max(1, mk)
-    top_s = medfilt(top_f, kernel_size=mk)
-    kernel = np.ones(box_k) / box_k
-    top_s = np.convolve(np.pad(top_s, box_k // 2, mode="edge"), kernel, mode="valid")[:w]
+    bottom_s = _smooth_line(bottom_f, w, cu_median_k, cu_box_k)
+
+    thickness = np.clip(bottom_f[valid] - top_f[valid], 1, None)
+    typical_thickness = float(np.median(thickness))
+    median_k = int(round(typical_thickness * imc_median_k_frac))
+    median_k = max(imc_median_k_range[0], min(imc_median_k_range[1], median_k))
+    if median_k % 2 == 0:
+        median_k += 1
+    box_k = int(round(typical_thickness * imc_box_k_frac))
+    box_k = max(imc_box_k_range[0], min(imc_box_k_range[1], box_k))
+    top_s = _smooth_line(top_f, w, median_k, box_k)
 
     out = pred.copy()
     rows = np.arange(h)[:, None]
     lo = np.clip(top_s, 0, h)[None, :]
-    hi = np.clip(bottom_f, 0, h)[None, :]
+    hi = np.clip(bottom_s, 0, h)[None, :]
     new_imc = (rows >= lo) & (rows < hi)
-    out[:, valid] = np.where(new_imc[:, valid], 1,
-                              np.where(rows >= hi[:, valid], out[:, valid], 0))
+    new_cu = rows >= hi
+    out[:, valid] = np.where(new_imc[:, valid], 1, np.where(new_cu[:, valid], 2, 0))
     return out
 
 
