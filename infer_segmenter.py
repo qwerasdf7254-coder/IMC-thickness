@@ -87,6 +87,32 @@ def _smooth_line(arr, w, median_k, box_k):
     return np.convolve(np.pad(s, bk // 2, mode="edge"), kernel, mode="valid")[:w]
 
 
+def _despike(arr, w, window_frac=0.35, mad_k=5.0, min_window=31):
+    """Reject columns whose raw boundary position deviates far from a wide
+    local-median reference, then re-interpolate over them. A polishing
+    scratch (a strong, spatially-extended texture shared by Cu and IMC) can
+    drag the raw per-column boundary along its own diagonal for many
+    adjacent columns -- that run is long enough that a same-sized median
+    filter treats it as signal, not noise, and just follows it. Comparing
+    against a much wider reference window catches the drag regardless of
+    its run length, as long as the scratch doesn't span more than about
+    half that window."""
+    window = max(min_window, int(round(w * window_frac)))
+    window = window - 1 if window % 2 == 0 else window
+    window = min(window, w - (1 - w % 2))
+    window = max(1, window)
+    ref = medfilt(arr, kernel_size=window)
+    dev = np.abs(arr - ref)
+    mad = np.median(dev)
+    thresh = mad_k * max(mad, 1.0)
+    bad = dev > thresh
+    if not bad.any() or bad.all():
+        return arr
+    idx = np.arange(w)
+    good = ~bad
+    return np.interp(idx, idx[good], arr[good])
+
+
 def smooth_imc_solder_boundary(pred, cu_median_k=61, cu_box_k=21,
                                 imc_median_k_frac=0.55, imc_median_k_range=(9, 51),
                                 imc_box_k_frac=0.35, imc_box_k_range=(5, 25)):
@@ -124,6 +150,9 @@ def smooth_imc_solder_boundary(pred, cu_median_k=61, cu_box_k=21,
     idx = np.arange(w)
     top_f = np.interp(idx, idx[valid], top[valid])
     bottom_f = np.interp(idx, idx[valid], bottom[valid])
+
+    top_f = _despike(top_f, w)
+    bottom_f = _despike(bottom_f, w)
 
     bottom_s = _smooth_line(bottom_f, w, cu_median_k, cu_box_k)
 
