@@ -1,0 +1,13 @@
+﻿train images: 20, val images: 4
+device: cuda
+epoch  1  train_loss 0.5404  val_loss 0.3404  val_acc 0.834  val_IMC_IoU 0.777
+  -> new best, checkpoint saved
+epoch  2  train_loss 0.3855  val_loss 0.2920  val_acc 0.856  val_IMC_IoU 0.799
+  -> new best, checkpoint saved
+epoch  3  train_loss 0.3097  val_loss 1.6244  val_acc 0.546  val_IMC_IoU 0.165
+epoch  4  train_loss 0.2806  val_loss 0.2209  val_acc 0.897  val_IMC_IoU 0.845
+  -> new best, checkpoint saved
+epoch  5  train_loss 0.2469  val_loss 0.1618  val_acc 0.946  val_IMC_IoU 0.907
+  -> new best, checkpoint saved
+epoch  6  train_loss 0.2340  val_loss 0.1454  val_acc 0.942  val_IMC_IoU 0.907
+  -> new best, checkpoint saved
