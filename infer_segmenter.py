@@ -87,6 +87,34 @@ def largest_component_per_class(pred, close_kernel=61):
 
 
 from scipy.signal import medfilt
+from scipy.interpolate import PchipInterpolator
+
+
+def _fill_gaps(arr, good, w):
+    """Fill missing/rejected columns by curving through them instead of
+    drawing a straight chord. A plain linear fill (np.interp) snaps dead
+    straight across any wide gap (e.g. a scratch severing the IMC/solder
+    scallop line for 40+ columns), which reads as a flat cliff where the
+    real boundary should keep undulating -- and can visibly over- or
+    under-include IMC relative to the true curve. PCHIP (a shape-preserving
+    Hermite spline) instead continues along the slope each side was already
+    on, curving into and out of the gap the way a real interface would,
+    without the overshoot a plain cubic spline could add."""
+    idx = np.arange(w)
+    n_good = int(np.count_nonzero(good))
+    if n_good == 0:
+        return arr
+    if n_good == 1:
+        return np.full(w, arr[good][0])
+    gi = idx[good]
+    filled = PchipInterpolator(gi, arr[good], extrapolate=False)(idx)
+    # PCHIP only fills strictly between the first and last known column.
+    # Columns beyond that (true extrapolation, e.g. near the frame edge)
+    # hold the nearest known value flat instead of continuing the curve's
+    # slope, which can overshoot badly with nothing to pull it back.
+    filled[idx < gi[0]] = arr[good][0]
+    filled[idx > gi[-1]] = arr[good][-1]
+    return filled
 
 
 def _smooth_line(arr, w, median_k, box_k):
@@ -97,6 +125,31 @@ def _smooth_line(arr, w, median_k, box_k):
     bk = max(1, min(box_k, w))
     kernel = np.ones(bk) / bk
     return np.convolve(np.pad(s, bk // 2, mode="edge"), kernel, mode="valid")[:w]
+
+
+def _despike_slope(arr, w, max_jump=35.0):
+    """Reject columns on either side of an implausibly fast column-to-column
+    jump -- a near-vertical step no real Cu/IMC/solder interface can make --
+    and re-interpolate over them. Complements _despike(): that one compares
+    each column to a wide local trend and can miss a jump that's short but
+    very steep, especially on images (e.g. alloy/aging conditions with
+    genuinely large IMC "finger" bumps) where real large-amplitude
+    variation elsewhere already raises the value-deviation bar past what
+    a scratch-induced cliff needs to clear. A steep local slope is a
+    giveaway regardless of the image's overall variation."""
+    if w < 3:
+        return arr
+    diffs = np.abs(np.diff(arr))
+    jump_at = diffs > max_jump
+    if not jump_at.any():
+        return arr
+    bad = np.zeros(w, dtype=bool)
+    bad[1:] |= jump_at
+    bad[:-1] |= jump_at
+    if bad.all():
+        return arr
+    good = ~bad
+    return _fill_gaps(arr, good, w)
 
 
 def _despike(arr, w, window_frac=0.35, mad_k=5.0, min_window=31):
@@ -120,9 +173,8 @@ def _despike(arr, w, window_frac=0.35, mad_k=5.0, min_window=31):
     bad = dev > thresh
     if not bad.any() or bad.all():
         return arr
-    idx = np.arange(w)
     good = ~bad
-    return np.interp(idx, idx[good], arr[good])
+    return _fill_gaps(arr, good, w)
 
 
 def smooth_imc_solder_boundary(pred, cu_median_k=61, cu_box_k=21,
@@ -159,10 +211,11 @@ def smooth_imc_solder_boundary(pred, cu_median_k=61, cu_box_k=21,
     valid = ~np.isnan(top) & ~np.isnan(bottom)
     if not valid.any():
         return pred
-    idx = np.arange(w)
-    top_f = np.interp(idx, idx[valid], top[valid])
-    bottom_f = np.interp(idx, idx[valid], bottom[valid])
+    top_f = _fill_gaps(top, valid, w)
+    bottom_f = _fill_gaps(bottom, valid, w)
 
+    top_f = _despike_slope(top_f, w)
+    bottom_f = _despike_slope(bottom_f, w)
     top_f = _despike(top_f, w)
     bottom_f = _despike(bottom_f, w)
 
