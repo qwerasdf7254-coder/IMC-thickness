@@ -58,19 +58,31 @@ def predict_mask(model, gray, tile=256, overlap=64):
     return pred
 
 
-def largest_component_per_class(pred):
+def largest_component_per_class(pred, close_kernel=61):
     """Light cleanup: keep only the largest connected component per class to
-    drop small speckle mis-classifications, without altering true shape."""
+    drop small speckle mis-classifications, without altering true shape.
+
+    A polishing scratch is a thin band that can slice straight through an
+    otherwise-continuous Cu or IMC region, splitting it into two raw
+    connected components even though it's physically one layer -- the
+    piece on the far side of the scratch is real, not speckle, but a plain
+    largest-component filter deletes it anyway just for being disconnected.
+    Bridge gaps up to about `close_kernel` pixels wide with a morphological
+    closing before computing connectivity (only to decide what counts as
+    "the same piece"), so a scratch-severed region survives as one piece
+    while genuinely separate small islands still get dropped."""
     out = pred.copy()
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_kernel, close_kernel))
     for cls in (1, 2):
         mask = (pred == cls).astype(np.uint8)
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
         if n <= 1:
             continue
         areas = stats[1:, cv2.CC_STAT_AREA]
         keep = 1 + int(np.argmax(areas))
         drop = mask.astype(bool) & (labels != keep)
-        out[drop] = 0  # reassign speckle back to solder(background) by default
+        out[drop] = 0  # reassign true speckle back to solder(background) by default
     return out
 
 
