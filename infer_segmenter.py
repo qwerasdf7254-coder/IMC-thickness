@@ -241,7 +241,7 @@ def smooth_imc_solder_boundary(pred, cu_median_k=61, cu_box_k=21,
     return out
 
 
-def process(model, image_path, meta_search_dirs=()):
+def process(model, image_path, meta_search_dirs=(), manual_scale_um_per_px=None):
     image_path = Path(image_path)
     gray_full = imread_unicode(image_path)
     gray, bar_top = crop_bar(gray_full)
@@ -255,8 +255,10 @@ def process(model, image_path, meta_search_dirs=()):
     thickness_px = imc_mask.sum(axis=0).astype(float)
     valid = thickness_px > 0
 
-    meta = metadata.find_metadata_for_image(image_path, extra_search_dirs=meta_search_dirs)
-    px_size_um = metadata.pixel_size_um(meta, gray_full.shape[1]) if meta else None
+    px_size_um = manual_scale_um_per_px
+    if px_size_um is None:
+        meta = metadata.find_metadata_for_image(image_path, extra_search_dirs=meta_search_dirs)
+        px_size_um = metadata.pixel_size_um(meta, gray_full.shape[1]) if meta else None
 
     return {
         "file": str(image_path), "pred": pred, "gray": gray,
